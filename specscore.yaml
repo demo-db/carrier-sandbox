@@ -1,0 +1,10 @@
+# SpecScore Repo Config Schema: https://specscore.md/repo-config
+
+project:
+    title: Carrier sandbox
+    host: github.com
+    org: demo-db
+    repo: carrier-sandbox
+
+# Required before using Plan commands; may point to this repository.
+# plans_repo: owner/repository

@@ -1,0 +1,17 @@
+{
+  "name": "demodb-carrier-sandbox",
+  "private": true,
+  "type": "module",
+  "description": "Synthetic, read-only carrier booking lookup for the DataTug public demo.",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "dev": "wrangler dev",
+    "deploy": "node scripts/deploy.mjs",
+    "smoke:live": "node scripts/smoke-live.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "4.152.0"
+  }
+}
