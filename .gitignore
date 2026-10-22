@@ -1,0 +1,6 @@
+specscore.local.yaml
+**/.*.lifecycle-transaction.lock
+.specscore-lifecycle.lock
+node_modules/
+.wrangler/
+.dev.vars

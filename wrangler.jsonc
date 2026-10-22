@@ -1,0 +1,20 @@
+// Carrier sandbox Worker. REQ:no-visitor-state is an allowlist: this file declares no bindings,
+// no tail consumers and no Logpush, and disables observability. The only var, VERSION, is the
+// commit SHA injected at deploy time (`wrangler deploy --var VERSION:<sha>`); "dev" otherwise.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "demodb-carrier-sandbox",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-04",
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": false },
+  "logpush": false,
+  "vars": { "VERSION": "dev" },
+  "routes": [
+    {
+      "pattern": "carrier.demodb.dev",
+      "custom_domain": true
+    }
+  ]
+}

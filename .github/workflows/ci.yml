@@ -1,0 +1,116 @@
+name: Test and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carrier-sandbox-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # AC records-match-fixture: the compiled records are checked against the demo fixture on main.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: datatug/datatug-demo-project
+          ref: main
+          path: demo-project
+          persist-credentials: false
+          sparse-checkout: demo-project-1/fixtures/shipping
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Unit and fixture-consistency tests
+        env:
+          FIXTURE_SHIPPING_DIR: ${{ github.workspace }}/demo-project/demo-project-1/fixtures/shipping
+        run: npm test
+      - name: Validate the Worker bundle without deploying
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: npx --no-install wrangler deploy --dry-run --outdir "$RUNNER_TEMP/bundle"
+
+  # End-to-end check of this PR's own code in workerd: `wrangler dev` serves the Worker locally and
+  # the same smoke script used after the production deploy runs against it.
+  workerd-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Smoke-test the Worker under wrangler dev
+        env:
+          WRANGLER_SEND_METRICS: "false"
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          npx --no-install wrangler dev --ip 127.0.0.1 --port 8787 --var "VERSION:$SHA" > "$RUNNER_TEMP/wrangler-dev.log" 2>&1 &
+          EXPECT_VERSION="$SHA" node scripts/smoke-live.mjs http://127.0.0.1:8787 || { cat "$RUNNER_TEMP/wrangler-dev.log"; exit 1; }
+
+  # AC public-https from a datacenter host: informational on pull requests (it checks production as
+  # deployed, not this PR's code), so it never blocks a PR. On main the deploy job's own smoke step is
+  # the gate.
+  live-reachability:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: node scripts/smoke-live.mjs https://carrier.demodb.dev
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: [test, workerd-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HAS_CREDENTIALS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && (vars.CLOUDFLARE_ACCOUNT_ID != '' || secrets.CLOUDFLARE_ACCOUNT_ID != '') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Deploy skipped because credentials are unavailable
+        if: env.HAS_CREDENTIALS != 'true'
+        run: echo "::notice::Tests passed; Cloudflare deploy skipped because CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID is unavailable."
+      # The token needs Account > Workers Scripts: Edit and, on demodb.dev, Zone > Workers Routes: Edit,
+      # Zone > DNS: Edit and Zone: Read (wrangler manages the carrier.demodb.dev custom domain record).
+      - name: Deploy the Worker with the commit SHA as VERSION
+        if: env.HAS_CREDENTIALS == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DEPLOY_VERSION: ${{ github.sha }}
+        run: node scripts/deploy.mjs
+      - name: Verify the deployed commit and contract from a datacenter host
+        if: env.HAS_CREDENTIALS == 'true'
+        env:
+          EXPECT_VERSION: ${{ github.sha }}
+        run: node scripts/smoke-live.mjs https://carrier.demodb.dev
