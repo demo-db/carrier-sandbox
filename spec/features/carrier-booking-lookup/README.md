@@ -153,7 +153,8 @@ the `VERSION` var; a production deploy without a valid SHA fails. `dev` is allow
 from a non-browser client (the DataTug server runner, curl) with no `Origin` and no cookies gets the
 Worker's JSON, not a challenge or HTML page. Platform-generated errors (Cloudflare 52x/1xxx pages) are
 outside the Worker's control and are not labelled; the Worker itself never lets an exception escape
-(see `internal_error`). No `NEL` or `Report-To` header reaches the visitor.
+(see `internal_error`). The Worker never sets `NEL` or `Report-To`; the zone-level Cloudflare Network
+Error Logging that `demodb.dev` currently adds is governed by the open question below.
 
 ## Dependencies
 
@@ -249,11 +250,15 @@ outside the Worker's control and are not labelled; the Worker itself never lets 
 
 **Given** the sandbox deployed to `carrier.demodb.dev`
 **When** `GET https://carrier.demodb.dev/` and lookups are requested with no `Origin` and no cookies, both from a workstation (curl) and from a datacenter host (the CI smoke job on GitHub-hosted runners)
-**Then** each answers JSON from the Worker (no challenge page) over a publicly trusted certificate, `version` is the deployed 40-character commit SHA, and no `NEL`, `Report-To` or `Set-Cookie` header is present.
+**Then** each answers JSON from the Worker (no challenge page) over a publicly trusted certificate, `version` is the deployed 40-character commit SHA, and no `Set-Cookie` header is present.
 
 ## Open Questions
 
-None at this time.
+- **Zone-level Network Error Logging.** Cloudflare adds `NEL` and `Report-To` (failure reports only,
+  `success_fraction: 0.0`) to every `demodb.dev` response, so a visitor's browser may report a failed
+  request (URL and network details) to Cloudflare. The Worker cannot remove these headers; turning NEL
+  off is a zone-wide setting for every `demodb.dev` host. Recommend turning it off for the zone; the
+  founder decides. Until then the live smoke check reports their presence as a warning.
 
 ---
 *This document follows the https://specscore.md/feature-specification*
