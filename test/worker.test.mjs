@@ -3,10 +3,26 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 
-import worker, { NOTICE, makeHandler } from "../src/index.js";
+import worker from "../src/index.js";
+import { NOTICE, makeHandler } from "../src/sandbox.js";
 
 const BASE = "https://carrier.demodb.dev";
 const SHA = "0123456789abcdef0123456789abcdef01234567";
+
+const CORPUS = [
+  ["/", "GET"],
+  ["/v1/bookings?request_id=request-11038", "GET"],
+  ["/v1/bookings?request_id=request-11045", "GET"],
+  ["/v1/bookings", "GET"],
+  ["/v1/bookings?request_id=a&request_id=b", "GET"],
+  ["/v1/bookings?request_id=x", "GET"],
+  ["/v1/shipments", "GET"],
+  ["/", "POST"],
+  ["/v1/bookings", "OPTIONS"],
+  ["/nowhere", "OPTIONS"],
+  ["/v1/bookings?request_id=request-11038", "HEAD"],
+  ["/v1/bookings", "DELETE"],
+];
 
 function send(path, { method = "GET", headers = {} } = {}) {
   return worker.fetch(new Request(BASE + path, { method, headers }), { VERSION: SHA });
@@ -37,7 +53,7 @@ const LOOKUP_FIELDS = [
 ];
 
 test("AC booked-record: request-11038 is booked", async () => {
-  const res = send("/v1/bookings?request_id=request-11038");
+  const res = await send("/v1/bookings?request_id=request-11038");
   assert.equal(res.status, 200);
   assertLabelled(res);
   const b = await body(res);
@@ -56,7 +72,7 @@ test("AC booked-record: request-11038 is booked", async () => {
 
 test("AC no-booking: 11045, 11062, a control and an unknown id are not_found", async () => {
   for (const id of ["request-11045", "request-11062", "request-90001", "request-90005", "request-99999"]) {
-    const res = send(`/v1/bookings?request_id=${id}`);
+    const res = await send(`/v1/bookings?request_id=${id}`);
     assert.equal(res.status, 200, id);
     assertLabelled(res);
     const b = await body(res);
@@ -75,9 +91,9 @@ test("AC no-booking: 11045, 11062, a control and an unknown id are not_found", a
 });
 
 test("lookup value is percent-decoded once and matched case-sensitively; other params ignored", async () => {
-  assert.equal((await body(send("/v1/bookings?request_id=request%2D11038&x=1"))).status, "booked");
-  assert.equal((await body(send("/v1/bookings?Request_ID=request-11038&request_id=request-11045"))).status, "not_found");
-  const upper = send("/v1/bookings?request_id=REQUEST-11038");
+  assert.equal((await body(await send("/v1/bookings?request_id=request%2D11038&x=1"))).status, "booked");
+  assert.equal((await body(await send("/v1/bookings?Request_ID=request-11038&request_id=request-11045"))).status, "not_found");
+  const upper = await send("/v1/bookings?request_id=REQUEST-11038");
   assert.equal(upper.status, 400);
   assert.equal((await body(upper)).error.code, "invalid_request_id");
 });
@@ -90,7 +106,7 @@ test("notice is the fixed spec string", () => {
 });
 
 async function expectError(path, method, status, code) {
-  const res = send(path, { method });
+  const res = await send(path, { method });
   assert.equal(res.status, status, `${method} ${path}`);
   assertLabelled(res);
   assert.equal(res.headers.get("cache-control"), "no-store");
@@ -121,14 +137,14 @@ test("AC errors-shaped: codes, order and no echo", async () => {
   await expectError("/v1/shipments", "GET", 404, "unknown_path");
   await expectError("/v1/bookings/?request_id=request-11038", "GET", 404, "unknown_path");
   // 12 digits is the boundary: valid, not found.
-  const ok = send(`/v1/bookings?request_id=request-${"1".repeat(12)}`);
+  const ok = await send(`/v1/bookings?request_id=request-${"1".repeat(12)}`);
   assert.equal(ok.status, 200);
   assert.equal((await body(ok)).status, "not_found");
 });
 
 test("AC browser-cors: preflight on known and unknown paths", async () => {
   for (const path of ["/v1/bookings?request_id=request-11038", "/nowhere"]) {
-    const res = send(path, {
+    const res = await send(path, {
       method: "OPTIONS",
       headers: {
         Origin: "https://datatug.app",
@@ -146,20 +162,20 @@ test("AC browser-cors: preflight on known and unknown paths", async () => {
 });
 
 test("AC success-headers: GET and HEAD agree; HEAD has no body", async () => {
-  const get = send("/v1/bookings?request_id=request-11038");
-  const head = send("/v1/bookings?request_id=request-11038", { method: "HEAD" });
+  const get = await send("/v1/bookings?request_id=request-11038");
+  const head = await send("/v1/bookings?request_id=request-11038", { method: "HEAD" });
   assert.equal(head.status, get.status);
   assert.deepEqual([...head.headers], [...get.headers]);
   assert.equal(get.headers.get("content-type"), "application/json; charset=utf-8");
   assert.equal(get.headers.get("cache-control"), "public, max-age=300");
   assert.equal(await head.text(), "");
-  const headErr = send("/v1/bookings", { method: "HEAD" });
+  const headErr = await send("/v1/bookings", { method: "HEAD" });
   assert.equal(headErr.status, 400);
   assert.equal(await headErr.text(), "");
 });
 
 test("REQ service-description: GET / with version and no-store", async () => {
-  const res = send("/");
+  const res = await send("/");
   assert.equal(res.status, 200);
   assertLabelled(res);
   assert.equal(res.headers.get("cache-control"), "no-store");
@@ -177,35 +193,66 @@ test("REQ service-description: GET / with version and no-store", async () => {
 });
 
 test("AC stateless: headers, cookies and origin do not change the response", async () => {
-  const a = send("/v1/bookings?request_id=request-11038");
-  const b = send("/v1/bookings?request_id=request-11038", {
+  const a = await send("/v1/bookings?request_id=request-11038");
+  const b = await send("/v1/bookings?request_id=request-11038", {
     headers: { Cookie: "session=abc", "User-Agent": "Go-http-client/2.0", Origin: "https://example.org" },
   });
   assert.deepEqual([...a.headers], [...b.headers]);
   assert.equal(await a.text(), await b.text());
 });
 
-test("AC stateless: source reads only method and url and has no side channels", () => {
+// A request stand-in that answers only `method` and `url`; touching anything else (headers, body,
+// cf, clone, signal...) throws, so a Worker that reads more fails here.
+function trappedRequest(method, path) {
+  const allowed = { method, url: BASE + path };
+  return new Proxy(allowed, {
+    get(target, prop) {
+      if (prop === "method" || prop === "url") return target[prop];
+      if (prop === "then") return undefined; // not a thenable
+      throw new Error(`Worker read request.${String(prop)}`);
+    },
+  });
+}
+
+test("AC stateless: the Worker reads only method and url and uses no side channel", async () => {
+  const saved = { fetch: globalThis.fetch, caches: globalThis.caches, console: globalThis.console };
+  const calls = [];
+  const trap = (name) => (...args) => {
+    calls.push(name);
+    throw new Error(`Worker used ${name}`);
+  };
+  globalThis.fetch = trap("fetch");
+  globalThis.caches = new Proxy({}, { get: (_, p) => trap(`caches.${String(p)}`) });
+  globalThis.console = new Proxy({}, { get: (_, p) => trap(`console.${String(p)}`) });
+  try {
+    for (const [path, method] of CORPUS) {
+      const res = await worker.fetch(trappedRequest(method, path), { VERSION: SHA });
+      assert.notEqual(res.status, 500, `${method} ${path} touched something it must not`);
+      assert.equal(res.headers.get("set-cookie"), null);
+    }
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("AC stateless: source has no obvious side channel", () => {
   for (const file of readdirSync(new URL("../src/", import.meta.url))) {
     // Line comments describe the rule; only code is checked.
     const src = readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, "");
-    for (const forbidden of [
-      "request.headers",
-      ".headers.get(",
-      "request.cf",
-      "request.body",
-      "request.json",
-      "request.text",
-      "fetch(new",
-      "await fetch",
-      "caches.",
-      "console.",
-      "ctx.waitUntil",
-      "Set-Cookie",
-    ]) {
+    for (const forbidden of ["caches", "console", "waitUntil", "Set-Cookie", "globalThis", "request.headers", "request.cf"]) {
       assert.ok(!src.includes(forbidden), `${file} must not contain ${forbidden}`);
     }
   }
+});
+
+test("AC replay-invariant: a lookup answers the same bytes whatever happened before", async () => {
+  const first = await (await send("/v1/bookings?request_id=request-11045")).text();
+  // Simulate other traffic, including a booked lookup and errors, between the two reads.
+  for (const [path, method] of CORPUS) await send(path, { method });
+  const second = await (await send("/v1/bookings?request_id=request-11045")).text();
+  assert.equal(second, first);
+  assert.equal(JSON.parse(first).status, "not_found");
 });
 
 test("AC stateless: wrangler config is an allowlist", () => {
@@ -229,23 +276,15 @@ test("AC stateless: wrangler config is an allowlist", () => {
   assert.deepEqual(config.routes, [{ pattern: "carrier.demodb.dev", custom_domain: true }]);
 });
 
-const CORPUS = [
-  ["/", "GET"],
-  ["/v1/bookings?request_id=request-11038", "GET"],
-  ["/v1/bookings?request_id=request-11045", "GET"],
-  ["/v1/bookings", "GET"],
-  ["/v1/bookings?request_id=a&request_id=b", "GET"],
-  ["/v1/bookings?request_id=x", "GET"],
-  ["/v1/shipments", "GET"],
-  ["/", "POST"],
-  ["/v1/bookings", "OPTIONS"],
-];
 
 test("AC synthetic-everywhere and no-movement-wording over the finite corpus", async () => {
   const forbidden = /shipped|transit|picked up|delivery|delivered|scan|tracking/i;
   for (const [path, method] of CORPUS) {
-    const res = send(path, { method });
+    const res = await send(path, { method });
     assert.equal(res.headers.get("x-synthetic-data"), "true", `${method} ${path}`);
+    for (const h of ["nel", "report-to", "set-cookie", "access-control-allow-credentials"]) {
+      assert.equal(res.headers.get(h), null, `${method} ${path} must not set ${h}`);
+    }
     const text = await res.text();
     assert.ok(!forbidden.test(text), `${method} ${path}: ${text}`);
     if (text) {
@@ -261,7 +300,7 @@ test("AC synthetic-everywhere and no-movement-wording over the finite corpus", a
 });
 
 test("AC unexpected-error-labelled: a thrown handler answers 500 internal_error", async () => {
-  const res = makeHandler(() => {
+  const res = await makeHandler(() => {
     throw new Error("boom");
   }).fetch(new Request(BASE + "/v1/bookings?request_id=request-11038"), {});
   assert.equal(res.status, 500);
@@ -273,4 +312,18 @@ test("AC unexpected-error-labelled: a thrown handler answers 500 internal_error"
     notice: NOTICE,
     error: { code: "internal_error", message: "Unexpected error in the carrier sandbox." },
   });
+});
+
+test("AC unexpected-error-labelled: HEAD and async failures are labelled too", async () => {
+  const head = await makeHandler(() => {
+    throw new Error("boom");
+  }).fetch(new Request(BASE + "/", { method: "HEAD" }), {});
+  assert.equal(head.status, 500);
+  assertLabelled(head);
+  assert.equal(await head.text(), "");
+  const rejected = await makeHandler(async () => {
+    throw new Error("boom");
+  }).fetch(new Request(BASE + "/"), {});
+  assert.equal(rejected.status, 500);
+  assert.equal((await body(rejected)).error.code, "internal_error");
 });

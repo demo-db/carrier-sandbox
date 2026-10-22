@@ -10,7 +10,7 @@ Feature specifications for this project.
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| [Carrier booking lookup](carrier-booking-lookup/README.md) | Draft | A static, public, read-only HTTPS lookup that answers whether the synthetic carrier holds a booking for a Shipping request id. |
+| [Carrier booking lookup](carrier-booking-lookup/README.md) | Implementing | A static, public, read-only HTTPS lookup that answers whether the synthetic carrier holds a booking for a Shipping request id. |
 
 ## Open Questions
 

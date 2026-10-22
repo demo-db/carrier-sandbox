@@ -1,12 +1,12 @@
 ---
 format: https://specscore.md/feature-specification
-status: Draft
+status: Implementing
 ---
 
 # Feature: Carrier booking lookup
 
 > [SpecScore.**Studio**](https://specscore.studio): | [Explore](https://specscore.studio/app/github.com/demo-db/carrier-sandbox/spec/features/carrier-booking-lookup?op=explore) | [Edit](https://specscore.studio/app/github.com/demo-db/carrier-sandbox/spec/features/carrier-booking-lookup?op=edit) | [Ask question](https://specscore.studio/app/github.com/demo-db/carrier-sandbox/spec/features/carrier-booking-lookup?op=ask) | [Request change](https://specscore.studio/app/github.com/demo-db/carrier-sandbox/spec/features/carrier-booking-lookup?op=request-change) |
-**Status:** Draft
+**Status:** Implementing
 **Source Ideas:** —
 
 ## Summary
@@ -144,8 +144,9 @@ Checks run in this order and the first failure answers:
 `GET /` answers `200` with `synthetic`, `notice`, `service` (`carrier-sandbox`), `version`, `as_of`,
 `statuses` (`["booked", "not_found"]`) and `endpoints` (`["/v1/bookings?request_id={request_id}"]`).
 `version` is the full 40-character Git commit SHA the deploy was built from, injected by the deploy as
-the `VERSION` var; a production deploy without a valid SHA fails. `dev` is allowed only for local
-`wrangler dev` and tests.
+the `VERSION` var. Production deploys go through `scripts/deploy.mjs`, which refuses unless `VERSION`
+is the full SHA of the checked-out, clean `HEAD`; `dev` (the configured default) is for local `wrangler
+dev` and tests only.
 
 ### REQ: platform-reachability
 

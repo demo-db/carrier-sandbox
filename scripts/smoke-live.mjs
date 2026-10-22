@@ -1,13 +1,16 @@
-// Live check of the deployed sandbox (AC public-https, booked-record, no-booking, browser-cors).
+// End-to-end check of a running sandbox (AC public-https, booked-record, no-booking, browser-cors).
 // Usage: EXPECT_VERSION=<sha> node scripts/smoke-live.mjs [base-url]
+// Used after the production deploy (https://carrier.demodb.dev) and on pull requests against a
+// local `wrangler dev` of the PR's own code.
+import { lookup } from "../src/sandbox.js";
+
 const base = process.argv[2] ?? "https://carrier.demodb.dev";
 const expectVersion = process.env.EXPECT_VERSION;
 
+class CheckFailed extends Error {}
+
 function check(cond, msg) {
-  if (!cond) {
-    console.error(`FAIL: ${msg}`);
-    process.exit(1);
-  }
+  if (!cond) throw new CheckFailed(msg);
   console.log(`ok: ${msg}`);
 }
 
@@ -24,40 +27,49 @@ async function get(path, init) {
   check(res.status === 204 || type.startsWith("application/json"), `${path}: Worker JSON, not a challenge page`);
   check(res.headers.get("x-synthetic-data") === "true", `${path}: X-Synthetic-Data: true`);
   check(res.headers.get("access-control-allow-origin") === "*", `${path}: ACAO *`);
+  check(res.headers.get("access-control-expose-headers") === "X-Synthetic-Data", `${path}: exposes X-Synthetic-Data`);
   return res;
 }
 
-let lastError;
-for (let attempt = 1; attempt <= 12; attempt++) {
-  try {
-    const root = await get("/");
-    const doc = await root.json();
-    if (!expectVersion || doc.version === expectVersion) break;
-    lastError = `version ${doc.version} != ${expectVersion}`;
-  } catch (e) {
-    lastError = String(e);
+async function run() {
+  const root = await get("/");
+  check(root.status === 200, "GET / is 200");
+  check(root.headers.get("cache-control") === "no-store", "GET / is no-store");
+  const doc = await root.json();
+  check(/^[0-9a-f]{40}$/.test(doc.version), `version is a commit SHA (${doc.version})`);
+  if (expectVersion) check(doc.version === expectVersion, `version is ${expectVersion}`);
+
+  for (const id of ["request-11038", "request-11045", "request-11062"]) {
+    const res = await get(`/v1/bookings?request_id=${id}`);
+    check(res.status === 200, `${id}: 200`);
+    check(res.headers.get("cache-control") === "public, max-age=300", `${id}: cacheable`);
+    check((await res.text()) === JSON.stringify(lookup(id)), `${id}: body equals the contract record`);
   }
-  if (attempt === 12) check(false, `deployed version: ${lastError}`);
-  await new Promise((r) => setTimeout(r, 10_000));
+  const bad = await get("/v1/bookings");
+  check(bad.status === 400 && (await bad.json()).error.code === "missing_request_id", "missing request_id is 400");
+  for (const path of ["/v1/bookings", "/nowhere"]) {
+    const pre = await get(path, {
+      method: "OPTIONS",
+      headers: { Origin: "https://datatug.app", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "accept, x-custom" },
+    });
+    check(pre.status === 204, `${path}: preflight 204`);
+    check(pre.headers.get("access-control-allow-methods") === "GET, HEAD, OPTIONS", `${path}: allowed methods`);
+    check(pre.headers.get("access-control-allow-headers") === "*", `${path}: allowed headers`);
+    check(pre.headers.get("access-control-max-age") === "7200", `${path}: max-age`);
+  }
 }
 
-const root = await get("/");
-check(root.status === 200, "GET / is 200");
-const doc = await root.json();
-check(/^[0-9a-f]{40}$/.test(doc.version), `version is a commit SHA (${doc.version})`);
-
-const booked = await get("/v1/bookings?request_id=request-11038");
-const b = await booked.json();
-check(booked.status === 200 && b.status === "booked" && b.booking_reference === "booking-11038", "request-11038 booked");
-for (const id of ["request-11045", "request-11062"]) {
-  const res = await get(`/v1/bookings?request_id=${id}`);
-  const nb = await res.json();
-  check(res.status === 200 && nb.status === "not_found" && nb.synthetic === true, `${id} not_found`);
+// Retries cover a rollout still propagating or a dev server still starting.
+for (let attempt = 1; ; attempt++) {
+  try {
+    await run();
+    break;
+  } catch (e) {
+    if (attempt >= 12) {
+      console.error(`FAIL: ${e instanceof CheckFailed ? e.message : e}`);
+      process.exit(1);
+    }
+    console.log(`attempt ${attempt} failed (${e.message}); retrying in 10s`);
+    await new Promise((r) => setTimeout(r, 10_000));
+  }
 }
-const bad = await get("/v1/bookings");
-check(bad.status === 400 && (await bad.json()).error.code === "missing_request_id", "missing request_id is 400");
-const pre = await get("/v1/bookings", {
-  method: "OPTIONS",
-  headers: { Origin: "https://datatug.app", "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "accept, x-custom" },
-});
-check(pre.status === 204 && pre.headers.get("access-control-allow-methods") === "GET, HEAD, OPTIONS", "preflight 204");

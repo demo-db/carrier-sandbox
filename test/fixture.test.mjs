@@ -25,20 +25,21 @@ test("only request-11038 is compiled", () => {
   assert.deepEqual([...BOOKINGS.keys()], ["request-11038"]);
 });
 
-test("booked_at equals the baseline assignment-accepted event", { skip }, () => {
-  const events = readJsonl(join(dir, "logs", "base.jsonl")).filter(
-    (e) => e.attempt_id === "attempt-11038-1" && e.kind === "assignment-accepted",
-  );
-  assert.equal(events.length, 1);
-  assert.equal(events[0].synthetic, true);
-  assert.equal(BOOKINGS.get("request-11038").booked_at, events[0].occurred_at);
+test("records equal the baseline assignment-accepted events", { skip }, () => {
+  // Every baseline accepted assignment is a booking at the moment it was accepted; nothing else is.
+  const accepted = readJsonl(join(dir, "logs", "base.jsonl")).filter((e) => e.kind === "assignment-accepted");
+  assert.ok(accepted.length > 0, "base.jsonl has no assignment-accepted event");
+  for (const e of accepted) assert.equal(e.synthetic, true);
+  const expected = Object.fromEntries(accepted.map((e) => [`request-${e.order_id}`, e.occurred_at]));
+  const actual = Object.fromEntries([...BOOKINGS].map(([id, b]) => [id, b.booked_at]));
+  assert.deepEqual(actual, expected);
 });
 
 test("records equal the baseline carrier-gateway booking-confirmed events", { skip }, (t) => {
   const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
   const baseline = (manifest.carrierGatewayLogs ?? []).filter((s) => s.classification === "baseline");
   if (baseline.length === 0) {
-    t.diagnostic("fixture manifest declares no baseline carrier-gateway stream yet; booking_reference unchecked");
+    t.skip("fixture manifest declares no baseline carrier-gateway stream yet; booking_reference unchecked");
     return;
   }
   const confirmed = baseline

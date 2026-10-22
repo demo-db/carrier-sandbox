@@ -42,11 +42,34 @@ jobs:
           WRANGLER_SEND_METRICS: "false"
         run: npx --no-install wrangler deploy --dry-run --outdir "$RUNNER_TEMP/bundle"
 
-  # AC public-https from a datacenter host: the deployed sandbox answers JSON, not a challenge page,
-  # to a non-browser client on a GitHub-hosted runner. On a pull request it checks the live host
-  # as deployed; on main it runs after the deploy and requires the new commit.
+  # End-to-end check of this PR's own code in workerd: `wrangler dev` serves the Worker locally and
+  # the same smoke script used after the production deploy runs against it.
+  workerd-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Smoke-test the Worker under wrangler dev
+        env:
+          WRANGLER_SEND_METRICS: "false"
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          npx --no-install wrangler dev --ip 127.0.0.1 --port 8787 --var "VERSION:$SHA" > "$RUNNER_TEMP/wrangler-dev.log" 2>&1 &
+          EXPECT_VERSION="$SHA" node scripts/smoke-live.mjs http://127.0.0.1:8787 || { cat "$RUNNER_TEMP/wrangler-dev.log"; exit 1; }
+
+  # AC public-https from a datacenter host: informational on pull requests (it checks production as
+  # deployed, not this PR's code), so it never blocks a PR. On main the deploy job's own smoke step is
+  # the gate.
   live-reachability:
     if: github.event_name == 'pull_request'
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -60,7 +83,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push'
-    needs: test
+    needs: [test, workerd-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
